@@ -1,0 +1,7 @@
+pandas
+numpy
+vectorbt
+yfinance
+pyyaml
+python-dotenv
+pytest

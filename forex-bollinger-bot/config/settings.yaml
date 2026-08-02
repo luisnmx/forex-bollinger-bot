@@ -1,0 +1,21 @@
+data:
+  pair: "EURGBP=X"       # ticker de yfinance para EUR/GBP
+  timeframe: "1d"        # diario
+  start_date: "2010-01-01"
+  end_date: null         # null = hasta hoy
+  raw_path: "data/raw"
+  processed_path: "data/processed"
+
+strategy:
+  name: "bollinger_bounce"
+  bollinger:
+    period: 20
+    std_dev: 2.0
+  # stop_loss y take_profit se definen en la fase de optimización, no aquí
+
+validation:
+  in_sample_ratio: 0.7   # 70% para ajustar, 30% intocable (out-of-sample)
+
+account:
+  initial_capital: 10000
+  lot_size: 1000         # micro-lotes
