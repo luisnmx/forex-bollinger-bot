@@ -1,7 +1,4 @@
-"""Tests del motor de backtest y del split in-sample/out-of-sample.
-
-TODO: verificar que split_in_out_sample() no mezcla fechas.
-"""
+"""Tests del motor de backtest y del split in-sample/out-of-sample."""
 
 import pandas as pd
 import pytest
@@ -11,9 +8,42 @@ from forex_bot.backtest.engine import run_backtest
 from forex_bot.backtest.validation import split_in_out_sample
 
 
-def test_split_in_out_sample_not_implemented_yet():
+def test_split_in_out_sample_default_ratio():
+    idx = pd.date_range("2020-01-01", periods=100, freq="D")
+    df = pd.DataFrame({"close": range(100)}, index=idx)
+    df_in, df_out = split_in_out_sample(df, in_sample_ratio=0.7)
+    assert len(df_in) == 70
+    assert len(df_out) == 30
+
+
+def test_split_in_out_sample_no_overlap_and_covers_all_rows():
+    idx = pd.date_range("2020-01-01", periods=100, freq="D")
+    df = pd.DataFrame({"close": range(100)}, index=idx)
+    df_in, df_out = split_in_out_sample(df, in_sample_ratio=0.7)
+    assert df_in.index.max() < df_out.index.min()
+    assert len(df_in) + len(df_out) == len(df)
+
+
+def test_split_in_out_sample_sorts_unsorted_input():
+    idx = pd.date_range("2020-01-01", periods=10, freq="D")
+    df = pd.DataFrame({"close": range(10)}, index=idx).sample(frac=1, random_state=0)  # desordenado
+    df_in, df_out = split_in_out_sample(df, in_sample_ratio=0.7)
+    assert df_in.index.is_monotonic_increasing
+    assert df_out.index.is_monotonic_increasing
+    assert df_in.index.max() < df_out.index.min()
+
+
+def test_split_in_out_sample_invalid_ratio_raises():
     df = pd.DataFrame({"close": range(100)})
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="in_sample_ratio"):
+        split_in_out_sample(df, in_sample_ratio=1.5)
+    with pytest.raises(ValueError, match="in_sample_ratio"):
+        split_in_out_sample(df, in_sample_ratio=0.0)
+
+
+def test_split_in_out_sample_empty_df_raises():
+    df = pd.DataFrame({"close": []})
+    with pytest.raises(ValueError, match="vacío"):
         split_in_out_sample(df, in_sample_ratio=0.7)
 
 
