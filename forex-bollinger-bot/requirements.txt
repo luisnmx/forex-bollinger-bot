@@ -1,6 +1,6 @@
 pandas
 numpy
-vectorbt
+vectorbt==1.1.0  # engine.py probado contra esta versión; la API de from_signals() cambió respecto a la serie 0.2x
 yfinance
 pyyaml
 python-dotenv
