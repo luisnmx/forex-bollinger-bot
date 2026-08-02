@@ -16,6 +16,15 @@ strategy:
 validation:
   in_sample_ratio: 0.7   # 70% para ajustar, 30% intocable (out-of-sample)
 
+# reglas de evaluación de cuenta de fondeo (ver forex_bot.backtest.prop_firm
+# para los supuestos de cómo se interpretan estas reglas)
+prop_firm:
+  profit_target_pct: 0.06          # 6% Fase 1, 6% Fase 2
+  max_daily_loss_pct: 0.03         # 3% del balance al inicio del día
+  max_total_drawdown_pct: 0.06     # 6% del balance inicial (estático)
+  max_daily_profit_share_pct: 0.35 # ningún día > 35% de la ganancia total
+  min_trading_days: 1              # mínimo 1 día hábil operado por fase
+
 account:
   initial_capital: 10000
   lot_size: 1000         # micro-lotes
