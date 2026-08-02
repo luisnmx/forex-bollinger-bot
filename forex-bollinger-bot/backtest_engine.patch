@@ -1,0 +1,221 @@
+diff --git a/forex-bollinger-bot/requirements.txt b/forex-bollinger-bot/requirements.txt
+index cb2503d..dff2aed 100644
+--- a/forex-bollinger-bot/requirements.txt
++++ b/forex-bollinger-bot/requirements.txt
+@@ -1,6 +1,6 @@
+ pandas
+ numpy
+-vectorbt
++vectorbt==1.1.0  # engine.py probado contra esta versión; la API de from_signals() cambió respecto a la serie 0.2x
+ yfinance
+ pyyaml
+ python-dotenv
+diff --git a/forex-bollinger-bot/src/forex_bot/backtest/engine.py b/forex-bollinger-bot/src/forex_bot/backtest/engine.py
+index bd7b5da..34d4df5 100644
+--- a/forex-bollinger-bot/src/forex_bot/backtest/engine.py
++++ b/forex-bollinger-bot/src/forex_bot/backtest/engine.py
+@@ -1,19 +1,96 @@
+ """Motor de backtest.
+ 
+-TODO: usar vectorbt (o backtrader) para simular la ejecución de las
+-señales generadas por la estrategia sobre el histórico, incluyendo
+-stop_loss y take_profit una vez definidos en la fase de optimización.
++Usa vectorbt.Portfolio.from_signals() para simular la ejecución de las
++señales generadas por la estrategia (forex_bot.strategy) sobre el
++histórico de precios, incluyendo stop_loss, take_profit y costes de
++transacción.
++
++Nota sobre costes de transacción: en Forex el coste real es el spread
++bid/ask, no una comisión explícita como en acciones. vectorbt no tiene
++un concepto nativo de spread, así que se modela como `fees`: un
++porcentaje del valor de cada operación equivalente al spread típico
++del par (ej. para EUR/GBP con spread de ~1.5 pips a 4 decimales,
++fees ≈ 0.00015). `slippage` es aparte y se suma al coste efectivo de
++entrada/salida. Dejar ambos en su valor por defecto (0.0) simula un
++mercado sin fricción, útil como referencia, pero NO representativo de
++condiciones reales: siempre correr también con costes realistas antes
++de sacar conclusiones sobre la rentabilidad del modelo.
+ """
+ 
++from __future__ import annotations
++
+ import pandas as pd
++import vectorbt as vbt
+ 
++REQUIRED_SIGNAL_COLUMNS = ("long_entries", "long_exits", "short_entries", "short_exits")
+ 
+-def run_backtest(df: pd.DataFrame, signals: pd.Series, initial_capital: float,
+-                  stop_loss: float | None = None, take_profit: float | None = None):
++
++def run_backtest(
++    df: pd.DataFrame,
++    signals: pd.DataFrame,
++    initial_capital: float,
++    stop_loss: float | None = None,
++    take_profit: float | None = None,
++    fees: float = 0.0,
++    slippage: float = 0.0,
++    size: float | None = None,
++    freq: str = "1D",
++) -> vbt.Portfolio:
+     """Corre el backtest y devuelve el objeto de resultados (portfolio).
+ 
++    Args:
++        df: DataFrame con al menos la columna `close`, indexado por fecha
++            (ver forex_bot.data.loader.load_processed_data).
++        signals: DataFrame con columnas booleanas long_entries, long_exits,
++            short_entries, short_exits, con el mismo índice que `df`
++            (ver forex_bot.strategy.bollinger_bounce.generate_signals).
++        initial_capital: capital inicial de la cuenta.
++        stop_loss: stop loss como fracción del precio de entrada
++            (ej. 0.001 = 0.1%). None desactiva el stop loss.
++        take_profit: take profit como fracción del precio de entrada.
++            None desactiva el take profit.
++        fees: coste de transacción como fracción del valor de cada
++            operación. Ver nota sobre spread en el docstring del módulo.
++        slippage: deslizamiento como fracción del precio, aplicado
++            además de `fees`.
++        size: tamaño fijo de cada operación en unidades de la divisa
++            base (ej. lot_size de config/settings.yaml). None usa todo
++            el capital disponible en cada entrada (comportamiento por
++            defecto de vectorbt).
++        freq: frecuencia del índice temporal, usada por vectorbt para
++            anualizar métricas como el Sharpe ratio ("1D" para diario,
++            debe coincidir con data.timeframe de config/settings.yaml).
++
+     Returns:
+-        Objeto de resultados del framework de backtesting elegido
+-        (ej. vectorbt.Portfolio), del cual se derivan las métricas.
++        vectorbt.Portfolio con el resultado de la simulación, del cual
++        se derivan las métricas en forex_bot.backtest.metrics.
++
++    Raises:
++        ValueError: si a `df` le falta la columna `close`, a `signals`
++            le falta alguna columna requerida, o los índices de `df` y
++            `signals` no coinciden.
+     """
+-    raise NotImplementedError("TODO: implementar con vectorbt.Portfolio.from_signals()")
++    if "close" not in df.columns:
++        raise ValueError("df debe tener una columna 'close'")
++
++    missing = [c for c in REQUIRED_SIGNAL_COLUMNS if c not in signals.columns]
++    if missing:
++        raise ValueError(f"signals no tiene las columnas requeridas: {missing}")
++
++    if not df.index.equals(signals.index):
++        raise ValueError("df y signals deben compartir el mismo índice (fechas)")
++
++    return vbt.Portfolio.from_signals(
++        close=df["close"],
++        entries=signals["long_entries"],
++        exits=signals["long_exits"],
++        short_entries=signals["short_entries"],
++        short_exits=signals["short_exits"],
++        size=size,
++        sl_stop=stop_loss,
++        tp_stop=take_profit,
++        fees=fees,
++        slippage=slippage,
++        init_cash=initial_capital,
++        freq=freq,
++    )
+diff --git a/forex-bollinger-bot/tests/test_backtest.py b/forex-bollinger-bot/tests/test_backtest.py
+index 6964209..033dcbb 100644
+--- a/forex-bollinger-bot/tests/test_backtest.py
++++ b/forex-bollinger-bot/tests/test_backtest.py
+@@ -1,12 +1,13 @@
+ """Tests del motor de backtest y del split in-sample/out-of-sample.
+ 
+-TODO: verificar que split_in_out_sample() no mezcla fechas y que
+-run_backtest() produce un objeto de resultados coherente.
++TODO: verificar que split_in_out_sample() no mezcla fechas.
+ """
+ 
+ import pandas as pd
+ import pytest
++import vectorbt as vbt
+ 
++from forex_bot.backtest.engine import run_backtest
+ from forex_bot.backtest.validation import split_in_out_sample
+ 
+ 
+@@ -14,3 +15,79 @@ def test_split_in_out_sample_not_implemented_yet():
+     df = pd.DataFrame({"close": range(100)})
+     with pytest.raises(NotImplementedError):
+         split_in_out_sample(df, in_sample_ratio=0.7)
++
++
++def _make_df_and_signals():
++    """10 barras diarias con una entrada larga (día 3) que sale en TP/
++    señal (día 5) y una entrada corta (día 5) que sale (día 8)."""
++    idx = pd.date_range("2020-01-01", periods=10, freq="D")
++    df = pd.DataFrame({
++        "close": [1.10, 1.09, 1.08, 1.07, 1.12, 1.13, 1.14, 1.09, 1.08, 1.11],
++    }, index=idx)
++    signals = pd.DataFrame({
++        "long_entries":  [False, False, True,  False, False, False, False, True,  False, False],
++        "long_exits":    [False, False, False, False, True,  False, False, False, False, True],
++        "short_entries": [False, False, False, False, True,  False, False, False, False, True],
++        "short_exits":   [False, False, True,  False, False, False, False, True,  False, False],
++    }, index=idx)
++    return df, signals
++
++
++def test_run_backtest_returns_vectorbt_portfolio():
++    df, signals = _make_df_and_signals()
++    pf = run_backtest(df, signals, initial_capital=10_000)
++    assert isinstance(pf, vbt.Portfolio)
++
++
++def test_run_backtest_uses_initial_capital():
++    df, signals = _make_df_and_signals()
++    pf = run_backtest(df, signals, initial_capital=10_000)
++    assert pf.init_cash == 10_000
++
++
++def test_run_backtest_executes_trades_from_signals():
++    df, signals = _make_df_and_signals()
++    pf = run_backtest(df, signals, initial_capital=10_000)
++    # 2 entradas -> al menos 2 operaciones registradas
++    assert pf.trades.count() >= 2
++
++
++def test_run_backtest_applies_stop_loss_and_take_profit():
++    df, signals = _make_df_and_signals()
++    # sin stops
++    pf_no_stops = run_backtest(df, signals, initial_capital=10_000)
++    # con stops muy ajustados, debería forzar salidas distintas
++    pf_with_stops = run_backtest(
++        df, signals, initial_capital=10_000, stop_loss=0.005, take_profit=0.01
++    )
++    assert not pf_no_stops.trades.records_readable["Exit Timestamp"].equals(
++        pf_with_stops.trades.records_readable["Exit Timestamp"]
++    )
++
++
++def test_run_backtest_applies_fees():
++    df, signals = _make_df_and_signals()
++    pf_no_fees = run_backtest(df, signals, initial_capital=10_000, fees=0.0)
++    pf_with_fees = run_backtest(df, signals, initial_capital=10_000, fees=0.001)
++    assert pf_with_fees.final_value() < pf_no_fees.final_value()
++
++
++def test_run_backtest_missing_close_column_raises():
++    df, signals = _make_df_and_signals()
++    df = df.drop(columns=["close"])
++    with pytest.raises(ValueError, match="close"):
++        run_backtest(df, signals, initial_capital=10_000)
++
++
++def test_run_backtest_missing_signal_column_raises():
++    df, signals = _make_df_and_signals()
++    signals = signals.drop(columns=["long_exits"])
++    with pytest.raises(ValueError, match="long_exits"):
++        run_backtest(df, signals, initial_capital=10_000)
++
++
++def test_run_backtest_mismatched_index_raises():
++    df, signals = _make_df_and_signals()
++    signals.index = signals.index + pd.Timedelta(days=1)
++    with pytest.raises(ValueError, match="índice"):
++        run_backtest(df, signals, initial_capital=10_000)
